@@ -7,17 +7,11 @@ import streamlit as st
 from pdfminer.high_level import extract_text
 
 
-# =========================
-# STREAMLIT CONFIG
-# =========================
 st.set_page_config(page_title="Automatización revisión PDFs", layout="wide")
 st.title("📄 Automatización de revisión de Expedientes")
 st.caption("Sube uno o varios PDFs, aplica Expresiones Regulares y descarga un Excel consolidado.")
 
 
-# =========================
-# CONFIGURACIÓN
-# =========================
 CAMPOS = [
     "NUM_POL", "MON", "NUM_DOC", "FEC_NAC", "INI_VIG_POL", "FIN_VIG_POL",
     "PER_DIF", "PER_GAR", "REM_BASE", "PER_PAGO_RENTA",
@@ -42,11 +36,9 @@ PATRONES = {
 }
 
 
-# =========================
-# FUNCIONES
-# =========================
 def extraer_texto_pdf(uploaded_file):
     try:
+        uploaded_file.seek(0)  # clave para evitar puntero al final
         return extract_text(uploaded_file) or ""
     except Exception:
         return ""
@@ -56,13 +48,9 @@ def extraer_campo(texto, patron):
     m = re.search(patron, texto, flags=re.MULTILINE)
     if not m:
         return ""
-    val = re.sub(r"\s+", "", m.group(1)).strip()
-    return val
+    return re.sub(r"\s+", "", m.group(1)).strip()
 
 
-# =========================
-# SIDEBAR
-# =========================
 with st.sidebar:
     st.header("⚙️ Parámetros")
     to_upper = st.toggle("Convertir texto a MAYÚSCULAS", value=True)
@@ -70,9 +58,6 @@ with st.sidebar:
     excel_prefix = st.text_input("Prefijo del Excel", value="RentaMAX")
 
 
-# =========================
-# FILE UPLOADER
-# =========================
 uploaded_files = st.file_uploader(
     "📤 Sube uno o varios archivos PDF",
     type=["pdf"],
@@ -84,22 +69,16 @@ if not uploaded_files:
     st.stop()
 
 
-# =========================
-# PROCESAMIENTO
-# =========================
 if st.button("▶️ Procesar PDFs", type="primary"):
-
-    registros = []
-    errores = []
-
+    registros, errores = [], []
     progress = st.progress(0)
 
     for idx, file in enumerate(uploaded_files, start=1):
-
         texto = extraer_texto_pdf(file)
 
         if not texto.strip():
             errores.append({"ARCHIVO": file.name, "ERROR": "Texto vacío o no extraíble"})
+            progress.progress(idx / len(uploaded_files))
             continue
 
         texto_proc = texto.upper() if to_upper else texto
@@ -109,7 +88,6 @@ if st.button("▶️ Procesar PDFs", type="primary"):
                 st.text(texto_proc[:20000])
 
         fila = {"ARCHIVO": file.name}
-
         for campo in CAMPOS:
             try:
                 valor = extraer_campo(texto_proc, PATRONES[campo])
@@ -131,9 +109,6 @@ if st.button("▶️ Procesar PDFs", type="primary"):
         with st.expander("Ver detalles"):
             st.dataframe(pd.DataFrame(errores), use_container_width=True)
 
-    # =========================
-    # GENERAR EXCEL
-    # =========================
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="DATA")
