@@ -4,9 +4,14 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+
+# pdfminer.six
 from pdfminer.high_level import extract_text
 
 
+# =========================
+# STREAMLIT CONFIG (debe ir antes de cualquier otro st.*)
+# =========================
 st.set_page_config(page_title="Automatización revisión PDFs", layout="wide")
 st.title("📄 Automatización de revisión de Expedientes")
 st.caption("Sube uno o varios PDFs, aplica Expresiones Regulares y descarga un Excel consolidado.")
@@ -36,19 +41,45 @@ PATRONES = {
 }
 
 
-def extraer_texto_pdf(uploaded_file):
+def extraer_texto_pdf(uploaded_file) -> str:
+    """
+    Streamlit UploadedFile -> BytesIO -> pdfminer.extract_text
+    (más estable que pasar el UploadedFile directo).
+    """
     try:
-        uploaded_file.seek(0)  # clave para evitar puntero al final
-        return extract_text(uploaded_file) or ""
+        data = uploaded_file.getvalue()
+        if not data:
+            return ""
+        bio = BytesIO(data)
+        bio.seek(0)
+        txt = extract_text(bio)  # pdfminer.six
+        return txt or ""
     except Exception:
         return ""
 
 
-def extraer_campo(texto, patron):
+def extraer_campo(texto: str, patron: str) -> str:
     m = re.search(patron, texto, flags=re.MULTILINE)
     if not m:
         return ""
+    # Compacta espacios/saltos para que salgan fechas/números limpitos
     return re.sub(r"\s+", "", m.group(1)).strip()
+
+
+def elegir_engine_excel() -> str:
+    """
+    Evita que la app no cargue si openpyxl no está instalado.
+    """
+    try:
+        import openpyxl  # noqa: F401
+        return "openpyxl"
+    except Exception:
+        try:
+            import xlsxwriter  # noqa: F401
+            return "xlsxwriter"
+        except Exception:
+            # Último intento: que pandas elija (puede fallar si no hay engine)
+            return None
 
 
 with st.sidebar:
@@ -73,12 +104,14 @@ if st.button("▶️ Procesar PDFs", type="primary"):
     registros, errores = [], []
     progress = st.progress(0)
 
+    total = len(uploaded_files)
+
     for idx, file in enumerate(uploaded_files, start=1):
         texto = extraer_texto_pdf(file)
 
         if not texto.strip():
             errores.append({"ARCHIVO": file.name, "ERROR": "Texto vacío o no extraíble"})
-            progress.progress(idx / len(uploaded_files))
+            progress.progress(idx / total)
             continue
 
         texto_proc = texto.upper() if to_upper else texto
@@ -97,7 +130,7 @@ if st.button("▶️ Procesar PDFs", type="primary"):
                 errores.append({"ARCHIVO": file.name, "ERROR": f"{campo}: {e}"})
 
         registros.append(fila)
-        progress.progress(idx / len(uploaded_files))
+        progress.progress(idx / total)
 
     df = pd.DataFrame(registros)
 
@@ -110,8 +143,24 @@ if st.button("▶️ Procesar PDFs", type="primary"):
             st.dataframe(pd.DataFrame(errores), use_container_width=True)
 
     bio = BytesIO()
-    with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="DATA")
+    engine = elegir_engine_excel()
+
+    try:
+        if engine:
+            with pd.ExcelWriter(bio, engine=engine) as writer:
+                df.to_excel(writer, index=False, sheet_name="DATA")
+        else:
+            # sin engine explícito (puede fallar si no hay ninguno instalado)
+            with pd.ExcelWriter(bio) as writer:
+                df.to_excel(writer, index=False, sheet_name="DATA")
+    except Exception as e:
+        st.error(
+            "No pude generar el Excel (falta un engine). "
+            "Instala openpyxl o xlsxwriter en requirements.txt."
+        )
+        st.exception(e)
+        st.stop()
+
     bio.seek(0)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
